@@ -1,0 +1,15 @@
+[submodule "RECIPE"]
+	path = RECIPE
+	url = https://github.com/utsaslab/RECIPE.git
+[submodule "memcached-pmem"]
+	path = memcached-pmem
+	url = https://github.com/lenovo/memcached-pmem.git
+[submodule "CCEH"]
+	path = CCEH
+	url = https://github.com/DICL/CCEH.git
+[submodule "FAST_FAIR"]
+	path = FAST_FAIR
+	url = https://github.com/DICL/FAST_FAIR.git
+[submodule "Clevel-Hashing"]
+	path = Clevel-Hashing
+	url = https://github.com/chenzhangyu/Clevel-Hashing.git

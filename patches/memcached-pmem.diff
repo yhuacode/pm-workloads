@@ -1,0 +1,433 @@
+diff --git a/Makefile.am b/Makefile.am
+index 712aa45..e16ae57 100755
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -111,6 +111,25 @@ EXTRA_DIST = doc scripts t memcached.spec memcached_dtrace.d version.m4 README.m
+ 
+ MOSTLYCLEANFILES = *.gcov *.gcno *.gcda *.tcov
+ 
++INSTRUMENT_PASS_DIR = $(PMRACE_DIR)/instrument
++
++PMRACEPASS_FLAGS = -mclflushopt -mclwb -Xclang -load -Xclang $(INSTRUMENT_PASS_DIR)/libPMRacePass.so -fsanitize=dataflow -mllvm -dfsan-abilist=$(INSTRUMENT_PASS_DIR)/pmrace-ABI.txt -mllvm -dfsan-abilist=../abilists/libevent_abilist.txt -mllvm -dfsan-abilist=../abilists/libclang_rt.profile_abilist.txt
++RACE_OUTPUT_FLAGS = -mllvm -coverage-path -mllvm output/cov -mllvm -race-path -mllvm output/race.csv -mllvm -unflushed-path -mllvm output/unflushed.csv -mllvm -meta-path -mllvm $@.json
++RACE_PMDK_MODE_FLAGS = -mllvm -pmrace-mode -mllvm pmdk
++PMRACEHOOK_LD_FLAGS = -L$(INSTRUMENT_PASS_DIR) -Wl,-rpath='$(INSTRUMENT_PASS_DIR)' -lPMRaceHook -fsanitize=dataflow
++
++PMDK_DIR = $(PMRACE_DIR)/deps/pmdk
++PMDK_INSTALL_DIR = $(PMDK_DIR)/install
++PMDK_FLAGS = -I$(PMDK_INSTALL_DIR)/include
++PMDK_LD_FLAGS = -L$(PMDK_INSTALL_DIR)/lib/pmdk_debug -Wl,-rpath='$(PMDK_INSTALL_DIR)/lib/pmdk_debug' -lpmem -lpmemobj
++
++DEBUGFLAGS = -g -O0
++
++if ENABLE_PMRACE
++CFLAGS += $(PMRACEPASS_FLAGS) $(RACE_OUTPUT_FLAGS) $(RACE_PMDK_MODE_FLAGS) $(PMDK_FLAGS) $(DEBUGFLAGS)
++LDFLAGS += $(PMRACEHOOK_LD_FLAGS) $(PMDK_LD_FLAGS)
++endif
++
+ test:	memcached-debug sizes testapp
+ 	$(srcdir)/sizes
+ 	$(srcdir)/testapp
+diff --git a/configure.ac b/configure.ac
+index d7e763b..5d0dd64 100755
+--- a/configure.ac
++++ b/configure.ac
+@@ -88,6 +88,9 @@ AC_ARG_ENABLE(extstore,
+ AC_ARG_ENABLE(pslab,
+   [AS_HELP_STRING([--enable-pslab], [Enable persistent memory slab EXPERIMENTAL ])])
+ 
++AC_ARG_ENABLE(pmrace,
++  [AS_HELP_STRING([--enable-pmrace], [Enable pmrace instrumentation EXPERIMENTAL ])])
++
+ AC_ARG_ENABLE(seccomp,
+   [AS_HELP_STRING([--enable-seccomp],[Enable seccomp restrictions])])
+ 
+@@ -175,6 +178,7 @@ AM_CONDITIONAL([DTRACE_INSTRUMENT_OBJ],[test "$dtrace_instrument_obj" = "yes"])
+ AM_CONDITIONAL([ENABLE_SASL],[test "$enable_sasl" = "yes"])
+ AM_CONDITIONAL([ENABLE_EXTSTORE],[test "$enable_extstore" = "yes"])
+ AM_CONDITIONAL([ENABLE_PSLAB],[test "$enable_pslab" = "yes"])
++AM_CONDITIONAL([ENABLE_PMRACE],[test "$enable_pmrace" = "yes"])
+ 
+ AC_SUBST(DTRACE)
+ AC_SUBST(DTRACEFLAGS)
+@@ -635,7 +639,7 @@ then
+ elif test "$GCC" = "yes"
+ then
+   GCC_VERSION=`$CC -dumpversion`
+-  CFLAGS="$CFLAGS -Wall -Werror -pedantic -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls"
++  CFLAGS="$CFLAGS -Wall -pedantic -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls"
+   case $GCC_VERSION in
+     4.4.*)
+     CFLAGS="$CFLAGS -fno-strict-aliasing"
+diff --git a/hash.c b/hash.c
+index a0c3036..b5ff28a 100755
+--- a/hash.c
++++ b/hash.c
+@@ -4,6 +4,8 @@
+ #include "jenkins_hash.h"
+ #include "murmur3_hash.h"
+ 
++hash_func hash;
++
+ int hash_init(enum hashfunc_type type) {
+     switch(type) {
+         case JENKINS_HASH:
+diff --git a/hash.h b/hash.h
+index 059d1e2..3b2a984 100755
+--- a/hash.h
++++ b/hash.h
+@@ -2,7 +2,7 @@
+ #define    HASH_H
+ 
+ typedef uint32_t (*hash_func)(const void *key, size_t length);
+-hash_func hash;
++extern hash_func hash;
+ 
+ enum hashfunc_type {
+     JENKINS_HASH=0, MURMUR3_HASH
+diff --git a/items.c b/items.c
+index 8e6d9cf..729d6d1 100755
+--- a/items.c
++++ b/items.c
+@@ -1606,6 +1606,7 @@ static pthread_t lru_maintainer_tid;
+ #define MIN_LRU_MAINTAINER_SLEEP 1000
+ 
+ static void *lru_maintainer_thread(void *arg) {
++    fprintf(stderr, "lru_maintainer_thread started, tid=%u\n", gettid());
+     slab_automove_reg_t *sam = &slab_automove_default;
+ #ifdef EXTSTORE
+     void *storage = arg;
+@@ -1738,20 +1739,26 @@ static void *lru_maintainer_thread(void *arg) {
+     if (settings.verbose > 2)
+         fprintf(stderr, "LRU maintainer thread stopping\n");
+ 
++    fprintf(stderr, "lru_maintainer_thread stopped, tid=%u\n", gettid());
+     return NULL;
+ }
+ 
+ int stop_lru_maintainer_thread(void) {
+     int ret;
++    printf("stop_lru_maintainer_thread 1, tid=%u\n", gettid());
++    fflush(stdout);
+     pthread_mutex_lock(&lru_maintainer_lock);
++    printf("stop_lru_maintainer_thread 2, tid=%u\n", gettid());
+     /* LRU thread is a sleep loop, will die on its own */
+     do_run_lru_maintainer_thread = 0;
+     pthread_mutex_unlock(&lru_maintainer_lock);
++    printf("stop_lru_maintainer_thread 3, tid=%u\n", gettid());
+     if ((ret = pthread_join(lru_maintainer_tid, NULL)) != 0) {
+         fprintf(stderr, "Failed to stop LRU maintainer thread: %s\n", strerror(ret));
+         return -1;
+     }
+     settings.lru_maintainer_thread = false;
++    printf("stop_lru_maintainer_thread return, tid=%u\n", gettid());
+     return 0;
+ }
+ 
+diff --git a/memcached.c b/memcached.c
+index f66a738..c916f00 100755
+--- a/memcached.c
++++ b/memcached.c
+@@ -46,20 +46,21 @@
+ #ifndef __need_IOV_MAX
+ #define __need_IOV_MAX
+ #endif
+-#include <pwd.h>
+-#include <sys/mman.h>
+-#include <fcntl.h>
+-#include <netinet/tcp.h>
+ #include <arpa/inet.h>
++#include <assert.h>
+ #include <errno.h>
+-#include <stdlib.h>
++#include <fcntl.h>
++#include <limits.h>
++#include <netinet/tcp.h>
++#include <pwd.h>
++#include <semaphore.h>
++#include <stddef.h>
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+-#include <time.h>
+-#include <assert.h>
+-#include <limits.h>
++#include <sys/mman.h>
+ #include <sysexits.h>
+-#include <stddef.h>
++#include <time.h>
+ 
+ #ifdef HAVE_GETOPT_LONG
+ #include <getopt.h>
+@@ -241,7 +242,7 @@ static void settings_init(void) {
+     settings.inter = NULL;
+     settings.maxbytes = 64 * 1024 * 1024; /* default is 64MB */
+     settings.maxconns = 1024;         /* to limit connections-related memory to about 5MB */
+-    settings.verbose = 0;
++    settings.verbose = 99;
+     settings.oldest_live = 0;
+     settings.oldest_cas = 0;          /* supplements accuracy of oldest_live */
+     settings.evict_to_free = 1;       /* push old items out of cache when memory runs out */
+@@ -4662,6 +4663,16 @@ static void process_command(conn *c, char *command) {
+     }
+ 
+     ntokens = tokenize_command(command, tokens, MAX_TOKENS);
++
++    char debug_buf[1024];
++    memset(debug_buf, 0, sizeof debug_buf);
++
++    sprintf(debug_buf, "xxx-%u %s", gettid(), command);
++    for (int ix = 0; tokens[ix].length != 0; ix++) {
++        sprintf(debug_buf + strlen(debug_buf), " %s", tokens[ix]);
++    }
++    fprintf(stderr, "%s\n", debug_buf);
++
+     if (ntokens >= 3 &&
+         ((strcmp(tokens[COMMAND_TOKEN].value, "get") == 0) ||
+          (strcmp(tokens[COMMAND_TOKEN].value, "bget") == 0))) {
+@@ -6474,7 +6485,10 @@ static void remove_pidfile(const char *pid_file) {
+ 
+ static void sig_handler(const int sig) {
+     printf("Signal handled: %s.\n", strsignal(sig));
+-    exit(EXIT_SUCCESS);
++    if (event_base_loopbreak(main_base) == -1) {
++        perror("event_base_loopbreak failed");
++        exit(EXIT_FAILURE);
++    }
+ }
+ 
+ #ifndef HAVE_SIGIGNORE
+@@ -6592,6 +6606,163 @@ static bool _parse_slab_sizes(char *s, uint32_t *slab_sizes) {
+     return true;
+ }
+ 
++
++unsigned char *afl_testcase_buf;
++ssize_t afl_testcase_len;
++
++#ifndef __AFL_FUZZ_TESTCASE_LEN
++  ssize_t fuzz_len;
++  #define __AFL_FUZZ_TESTCASE_LEN fuzz_len
++  unsigned char fuzz_buf[1024000];
++  #define __AFL_FUZZ_TESTCASE_BUF fuzz_buf
++  #define __AFL_FUZZ_INIT()
++  #define __AFL_INIT() ((fuzz_len = read(0, fuzz_buf, sizeof(fuzz_buf))) > 0 ? 1 : 0)
++#endif
++
++__AFL_FUZZ_INIT()
++
++typedef struct pthread_args {
++  const char *buf;
++  ssize_t len;
++} pthread_args;
++
++sem_t sema_init;
++
++pid_t testing_pid;
++
++// static void (*lib1_sighandler)(int) = NULL;
++
++
++static void *connect_server(void *args)
++{
++    struct addrinfo *ai = 0;
++    struct addrinfo hints = { .ai_family = AF_UNSPEC,
++                              .ai_protocol = IPPROTO_TCP,
++                              .ai_socktype = SOCK_STREAM };
++    char service[NI_MAXSERV];
++    int error, sock = -1;
++    off_t offset = 0;
++    const char* ptr = ((pthread_args *)args)->buf;
++    size_t len = ((pthread_args *)args)->len;
++
++    sem_wait(&sema_init);
++
++    (void)snprintf(service, NI_MAXSERV, "%d", settings.port);
++    if ((error = getaddrinfo("127.0.0.1", service, &hints, &ai)) != 0) {
++       if (error != EAI_SYSTEM) {
++          fprintf(stderr, "getaddrinfo(): %s\n", gai_strerror(error));
++       } else {
++          perror("getaddrinfo()");
++       }
++    }
++
++    if (ai != NULL) {
++       if ((sock = socket(ai->ai_family, ai->ai_socktype,
++                          ai->ai_protocol)) != -1) {
++          if (connect(sock, ai->ai_addr, ai->ai_addrlen) == -1) {
++             fprintf(stderr, "Failed to connect socket: %s\n",
++                     strerror(errno));
++             close(sock);
++             sock = -1;
++          }
++       } else {
++          fprintf(stderr, "Failed to create socket: %s\n", strerror(errno));
++       }
++
++       freeaddrinfo(ai);
++    }
++
++    if (sock == -1) {
++        return NULL;
++    }
++
++    do {
++        ssize_t nw = write(sock, ptr + offset, len - offset);
++        if (nw == -1) {
++            if (errno != EINTR) {
++                fprintf(stderr, "Failed to write: %s\n", strerror(errno));
++                abort();
++            }
++        } else {
++            offset += nw;
++        }
++    } while (offset < len);
++
++    char quit_cmd[] = "quit\r\n";
++    if (write(sock, quit_cmd, sizeof(quit_cmd)) == -1) {
++        perror("Failed to write quit");
++        abort();
++    }
++
++    char buffer[4069];
++    while (recv(sock, buffer, sizeof(buffer), MSG_WAITALL) != 0);
++
++    close(sock);
++    return NULL;
++}
++
++void start_testing_process(pid_t ppid_arg) {
++    testing_pid = fork();
++    if (testing_pid < 0) {
++      perror("fork failed");
++      exit(EXIT_FAILURE);
++    }
++
++    if (!testing_pid) {
++        // child process for testing
++        printf("main debug child %u(tid) %u(pid)\n", gettid(), getpid());
++
++        pthread_args args[settings.num_threads];
++        pthread_t tid[settings.num_threads];
++        int i, ret;
++
++        sem_init(&sema_init, 0, 0);
++
++        if (afl_testcase_len < 0) {
++            perror("read failed");
++            exit(EXIT_FAILURE);
++        }
++
++        for (i = 0; i < settings.num_threads; ++i) {
++            if (i == 0) {
++                args[i].buf = strtok((char *)afl_testcase_buf, "\t");
++            } else {
++                args[i].buf = strtok(NULL, "\t");
++            }
++
++            args[i].len = args[i].buf == NULL ? 0 : strlen(args[i].buf);
++
++            if ((ret = pthread_create(&tid[i], NULL, connect_server, &args[i])) != 0) {
++                fprintf(stderr, "Can't create thread: %s\n", strerror(ret));
++                exit(EXIT_FAILURE);
++            }
++        }
++
++        for (i = 0; i < settings.num_threads; ++i) {
++            sem_post(&sema_init);
++        }
++
++        for (i = 0; i < settings.num_threads; ++i) {
++            pthread_join(tid[i], NULL);
++        }
++
++        // kill(getppid(), SIGINT);
++        pid_t ppid = getppid();
++        printf("main debug kill parent process: %u (arg: %u)\n", ppid, ppid_arg);
++        fflush(stdout);
++        if (kill(ppid, SIGINT) != 0) {
++            perror("kill failed\n");
++            fprintf(stderr, "failed to kill parent process: %u\n", ppid);
++            exit(EXIT_FAILURE);
++        } else {
++            printf("kill succeeded\n");
++            exit(EXIT_SUCCESS);
++        }
++        // printf("child process exited\n");
++    }
++}
++
++
+ int main (int argc, char **argv) {
+     int c;
+     bool lock_memory = false;
+@@ -7747,7 +7918,7 @@ fprintf(stderr, "pslab_size=%ld", pslab_size);
+                 use_slab_sizes = true;
+                 for (int i = 0; i < MAX_NUMBER_OF_SLAB_CLASSES; i++) {
+                     if (slab_sizes[i] == 0) {
+-                        assert(i > 0); 
++                        assert(i > 0);
+                         slab_sizes[i] = slab_sizes[i - 1];
+                         slab_sizes[i - 1] = 0;
+                         break;
+@@ -7812,6 +7983,11 @@ fprintf(stderr, "pslab_size=%ld", pslab_size);
+         slabs_update_policy();
+     }
+ #endif
++
++    __AFL_INIT();
++    afl_testcase_buf = __AFL_FUZZ_TESTCASE_BUF;
++    afl_testcase_len = __AFL_FUZZ_TESTCASE_LEN;
++
+ #ifdef EXTSTORE
+     if (storage_file) {
+         enum extstore_res eres;
+@@ -7970,6 +8146,9 @@ fprintf(stderr, "pslab_size=%ld", pslab_size);
+     /* Initialize the uriencode lookup table. */
+     uriencode_init();
+ 
++    pid_t pid = getpid();
++    start_testing_process(pid);
++
+     /* enter the event loop */
+     if (event_base_loop(main_base, 0) != 0) {
+         retval = EXIT_FAILURE;
+@@ -7988,5 +8167,8 @@ fprintf(stderr, "pslab_size=%ld", pslab_size);
+     if (u_socket)
+       free(u_socket);
+ 
++    printf("main debug 4 %u(tid) %u(pid)\n", gettid(), getpid());
++    fflush(stdout);
++
+     return retval;
+ }
+diff --git a/memcached.h b/memcached.h
+index b167b46..81534d5 100755
+--- a/memcached.h
++++ b/memcached.h
+@@ -28,6 +28,9 @@
+ #include <pthread.h>
+ #include <unistd.h>
+ #include <assert.h>
++#include <sys/syscall.h>
++
++#define gettid() ((pid_t)syscall(SYS_gettid))
+ 
+ #include "itoa_ljust.h"
+ #include "protocol_binary.h"
+diff --git a/slabs.c b/slabs.c
+index ee2a0cb..53d0aa2 100755
+--- a/slabs.c
++++ b/slabs.c
+@@ -371,6 +371,11 @@ static int do_slabs_newslab(const unsigned int id) {
+     int src = slabs_next_src;
+     int ret;
+ 
++    printf("pslab_size: %d\n", settings.pslab_size);
++    printf("mem_limit: %d\n", mem_limit);
++    printf("pslab_policy: %d\n", settings.pslab_policy);
++    printf("do_slabs_newslab: src = %d\n", src);
++
+     if ((ret = newslabs_funcs[src](id)) == 0) {
+         src ^= 1;
+         ret = newslabs_funcs[src](id);
