@@ -1,5 +1,5 @@
 diff --git a/CCEH-PMDK/Makefile b/CCEH-PMDK/Makefile
-index c71f10b..962240b 100644
+index c71f10b..c8ad84e 100644
 --- a/CCEH-PMDK/Makefile
 +++ b/CCEH-PMDK/Makefile
 @@ -1,19 +1,73 @@
@@ -122,10 +122,10 @@ index e186283..2483dd9 100644
  
  	switch(len)
 diff --git a/CCEH-PMDK/src/test.cpp b/CCEH-PMDK/src/test.cpp
-index 2d7b25c..3a3214b 100644
+index 2d7b25c..258ce57 100644
 --- a/CCEH-PMDK/src/test.cpp
 +++ b/CCEH-PMDK/src/test.cpp
-@@ -1,200 +1,167 @@
+@@ -1,200 +1,154 @@
 +#include <unistd.h>
 +
 +#include <algorithm>
@@ -243,6 +243,8 @@ index 2d7b25c..3a3214b 100644
 +  bool exists = false;
 +  TOID(CCEH) HashTable = OID_NULL;
 +
++  __AFL_INIT();
++
 +#ifndef PMRACE_ENABLED
 +  remove(path);
  #endif
@@ -295,19 +297,9 @@ index 2d7b25c..3a3214b 100644
 +    exists = true;
 +  }
 +
-+#ifndef PMRACE_ENABLED
-+  void* bak = malloc(POOL_SIZE), *addr = (void *)((uint64_t) pop + POOL_HDR_SIZE);
-+  memcpy(bak, addr, POOL_SIZE - POOL_HDR_SIZE);
-+#endif
-+
 +  cerr << "numThreads(" << numThreads << ")" << endl;
 +
-+  __AFL_INIT();
-+
 +  unsigned char* afl_testcase_buf = __AFL_FUZZ_TESTCASE_BUF;
-+
-+  while (__AFL_LOOP(100)) {
-+    int len = __AFL_FUZZ_TESTCASE_LEN;
  
 -    { // SEARCH
 -	cout << "Start Searching" << endl;
@@ -324,6 +316,9 @@ index 2d7b25c..3a3214b 100644
 -	elapsed = (end.tv_sec - start.tv_sec)*1000000000 + (end.tv_nsec - start.tv_nsec);
 -	cout << elapsed/1000 << "\tusec\t" << (uint64_t)(1000000*(numData/(elapsed/1000.0))) << "\tOps/sec\tSearch" << endl;
 -	cout << "Failed Search: " << failedSearch << endl;
++  // while (__AFL_LOOP(100)) {
++    int len = __AFL_FUZZ_TESTCASE_LEN;
++
 +    vector<thread> thread_groups;
 +    vector<istringstream> cmd_streams;
 +    std::atomic<int> next_thread_id;
@@ -331,10 +326,6 @@ index 2d7b25c..3a3214b 100644
 +    int i;
 +
 +    next_thread_id.store(0);
-+
-+#ifndef PMRACE_ENABLED
-+    memcpy(addr, bak, POOL_SIZE - POOL_HDR_SIZE);
-+#endif
 +
 +    for (i = 0; i < numThreads; ++i) {
 +      if (i == 0) {
@@ -445,17 +436,13 @@ index 2d7b25c..3a3214b 100644
 +      thread_groups[i].join();
      }
 -#endif
-+  }
-+
-+  D_RW(HashTable)->crashed = false;
-+  pmemobj_persist(pop, (char*)&D_RO(HashTable)->crashed, sizeof(bool));
-+  pmemobj_close(pop);
++  // }
  
 -    auto util = D_RW(HashTable)->Utilization();
 -    cout << "Utilization: " << util << " %" << endl;
-+#ifndef PMRACE_ENABLED
-+  free(bak);
-+#endif
++  D_RW(HashTable)->crashed = false;
++  pmemobj_persist(pop, (char*)&D_RO(HashTable)->crashed, sizeof(bool));
++  pmemobj_close(pop);
  
 -    D_RW(HashTable)->crashed = false;
 -    pmemobj_persist(pop, (char*)&D_RO(HashTable)->crashed, sizeof(bool));

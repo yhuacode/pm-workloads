@@ -1,5 +1,5 @@
 diff --git a/concurrent_pmdk/Makefile b/concurrent_pmdk/Makefile
-index db09d01..4643cd7 100644
+index db09d01..75ad820 100644
 --- a/concurrent_pmdk/Makefile
 +++ b/concurrent_pmdk/Makefile
 @@ -1,17 +1,52 @@
@@ -42,7 +42,7 @@ index db09d01..4643cd7 100644
 +else
 +	CXX = /home/vagrant/AFLplusplus/afl-clang-fast++
 +	CFLAGS += -I/home/vagrant/pmdk/install/include
-+	LDFLAGS += -L/home/vagrant/pmdk/install/lib/pmdk_debug -lpmem -lpmemobj -lpthread
++	LDFLAGS += -L/home/vagrant/pmdk/install/lib/pmdk_debug -lpmemobj -lpthread
 +endif
 +
 +LDFLAGS += -lrt -lm
@@ -66,7 +66,7 @@ index db09d01..4643cd7 100644
 +clean:
 +	rm -f btree_concurrent btree_concurrent_mixed *.o *.json
 diff --git a/concurrent_pmdk/src/test.cpp b/concurrent_pmdk/src/test.cpp
-index 12efd0b..3341df1 100644
+index 12efd0b..4575d48 100644
 --- a/concurrent_pmdk/src/test.cpp
 +++ b/concurrent_pmdk/src/test.cpp
 @@ -1,11 +1,27 @@
@@ -132,7 +132,7 @@ index 12efd0b..3341df1 100644
      case 'p':
        persistent_path = optarg;
      default:
-@@ -43,176 +58,119 @@ int main(int argc, char **argv) {
+@@ -43,176 +58,114 @@ int main(int argc, char **argv) {
    }
  
    // Make or Read persistent pool
@@ -144,6 +144,10 @@ index 12efd0b..3341df1 100644
 -  if (file_exists(persistent_path) != 0) {
 -    pop = pmemobj_create(persistent_path, "btree", 8000000000,
 -                         0666); // make 1GB memory pool
++  void *buf = malloc(POOL_SIZE);
++
++  __AFL_INIT();
++
 +  remove(persistent_path);
 +  if (file_exists(persistent_path) != 0)
 +  {
@@ -159,15 +163,6 @@ index 12efd0b..3341df1 100644
    }
  
 -  struct timespec start, end, tmp;
-+  void *buf = malloc(POOL_SIZE), *addr = (void *)((uint64_t)pop + POOL_HDR_SIZE);
-+  memcpy(buf, addr, POOL_SIZE - POOL_HDR_SIZE);
- 
--  // Reading data
--  entry_key_t *keys = new entry_key_t[numData];
-+  __AFL_INIT();
- 
--  ifstream ifs;
--  ifs.open(input_path);
 +  unsigned char *afl_testcase_buf = __AFL_FUZZ_TESTCASE_BUF;
 +  int afl_testcase_len = __AFL_FUZZ_TESTCASE_LEN;
 +  atomic<int> next_thread_id;
@@ -175,6 +170,13 @@ index 12efd0b..3341df1 100644
 +  char *tok;
 +  vector<istringstream> cmd_streams;
  
+-  // Reading data
+-  entry_key_t *keys = new entry_key_t[numData];
++  next_thread_id.store(0);
+ 
+-  ifstream ifs;
+-  ifs.open(input_path);
+-
 -  if (!ifs) {
 -    cout << "input loading error!" << endl;
 -  }
@@ -183,11 +185,9 @@ index 12efd0b..3341df1 100644
 -    ifs >> keys[i];
 -  }
 -  ifs.close();
-+  next_thread_id.store(0);
- 
+-
 -  clock_gettime(CLOCK_MONOTONIC, &start);
-+  memcpy(addr, buf, POOL_SIZE - POOL_HDR_SIZE);
- 
+-
 -  long half_num_data = numData / 2;
 +  for (i = 0; i < n_threads; ++i)
 +  {
@@ -283,10 +283,7 @@ index 12efd0b..3341df1 100644
 -                   },
 -                   from, to);
 -    futures.push_back(move(f));
-+  for (int tid = 0; tid < n_threads; tid++)
-+  {
-+    thread_groups.emplace_back(func);
-   }
+-  }
 -  for (auto &&f : futures)
 -    if (f.valid())
 -      f.get();
@@ -376,25 +373,27 @@ index 12efd0b..3341df1 100644
 -                   },
 -                   from, to);
 -    futures.push_back(move(f));
--  }
--
++  for (int tid = 0; tid < n_threads; tid++)
++  {
++    thread_groups.emplace_back(func);
+   }
+ 
 -  for (auto &&f : futures)
 -    if (f.valid())
 -      f.get();
- 
+-
 -  clock_gettime(CLOCK_MONOTONIC, &end);
 -  elapsedTime =
 -      (end.tv_sec - start.tv_sec) * 1000000000 + (end.tv_nsec - start.tv_nsec);
 -  cout << "Concurrent inserting and searching with " << n_threads
 -       << " threads (usec) : " << elapsedTime / 1000 << endl;
 -#endif
+-
+-  delete[] keys;
 +  for (auto &&f : thread_groups)
 +  {
 +    f.join();
 +  }
- 
--  delete[] keys;
-+  free(buf);
  
    pmemobj_close(pop);
 +

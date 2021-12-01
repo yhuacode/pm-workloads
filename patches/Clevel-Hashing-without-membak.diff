@@ -252,7 +252,7 @@ index 4f3aa18..6f80c79 100644
  	build_test(concurrent_hash_map_cli concurrent_hash_map/concurrent_hash_map_cli.cpp)
  	add_test_generic(NAME concurrent_hash_map_cli TRACERS none memcheck pmemcheck drd helgrind)
 diff --git a/tests/clevel_hash/clevel_hash_ycsb.cpp b/tests/clevel_hash/clevel_hash_ycsb.cpp
-index cf42671..1cd972a 100644
+index cf42671..d0d9fc5 100644
 --- a/tests/clevel_hash/clevel_hash_ycsb.cpp
 +++ b/tests/clevel_hash/clevel_hash_ycsb.cpp
 @@ -3,13 +3,14 @@
@@ -352,7 +352,7 @@ index cf42671..1cd972a 100644
  		printf("    thread_num: the number of threads (>=2)\n");
  		exit(1);
  	}
-@@ -140,20 +143,45 @@ main(int argc, char *argv[])
+@@ -140,20 +143,36 @@ main(int argc, char *argv[])
  	printf("MACRO HASH_POWER: %d\n", HASH_POWER);
  
  	const char *path = argv[1];
@@ -370,6 +370,9 @@ index cf42671..1cd972a 100644
  
  	// initialize clevel hash
  	nvobj::pool<root> pop;
++
++	__AFL_INIT();
++
  	remove(path); // delete the mapped file.
  
 -	pop = nvobj::pool<root>::create(
@@ -378,13 +381,6 @@ index cf42671..1cd972a 100644
 +
 +	pop = nvobj::pool<root>::create(path, LAYOUT, POOL_SIZE,
 +					S_IWUSR | S_IRUSR);
-+
-+#ifndef PMRACE_ENABLED
-+	void *bak = malloc(POOL_SIZE), *addr = (void *)((uint64_t) pop.handle() + POOL_HDR_SIZE);
-+	memcpy(bak, addr, POOL_SIZE - POOL_HDR_SIZE);
-+#endif
-+
-+	__AFL_INIT();
 +
 +	unsigned char *afl_testcase_buf = __AFL_FUZZ_TESTCASE_BUF;
 +	int afl_testcase_len = __AFL_FUZZ_TESTCASE_LEN;
@@ -396,15 +392,10 @@ index cf42671..1cd972a 100644
 +
 +	next_thread_id.store(0);
 +
-+#ifndef PMRACE_ENABLED
-+	memcpy(addr, bak, POOL_SIZE - POOL_HDR_SIZE);
-+	free(bak);
-+#endif
-+
  	auto proot = pop.root();
  
  	{
-@@ -169,259 +197,62 @@ main(int argc, char *argv[])
+@@ -169,259 +188,62 @@ main(int argc, char *argv[])
  	printf("initialization done.\n");
  	printf("initial capacity %ld\n", map->capacity());
  
@@ -478,10 +469,10 @@ index cf42671..1cd972a 100644
 -
 -	{
 -		nvobj::transaction::manual tx(pop);
--
--		map->set_thread_num(thread_num);
 +	};
  
+-		map->set_thread_num(thread_num);
+-
 -		nvobj::transaction::commit();
 +	for (i = 0; i < numThreads; ++i) {
 +		thread_groups.push_back(std::thread{func});

@@ -163,7 +163,7 @@ index 13df699..18bbf4c 100644
  // pmemobj header size (presume using default compact header)
  #define POBJ_HEADER_SIZE        16
 diff --git a/P-CLHT/src/clht_lb_res.c b/P-CLHT/src/clht_lb_res.c
-index 7411f12..5a01626 100644
+index 7411f12..17aa5a3 100644
 --- a/P-CLHT/src/clht_lb_res.c
 +++ b/P-CLHT/src/clht_lb_res.c
 @@ -1,4 +1,4 @@
@@ -258,14 +258,16 @@ index 7411f12..5a01626 100644
  clht_create(uint64_t num_buckets)
  {
      // Enable prefault
-@@ -229,11 +243,11 @@ clht_create(uint64_t num_buckets)
+@@ -229,11 +243,13 @@ clht_create(uint64_t num_buckets)
          perror("failed to configure prefaults at create\n");
  
      // Open the PMEMpool if it exists, otherwise create it
 -    size_t pool_size = 32*1024*1024*1024UL;
 -    if (access("/dev/shm/pool", F_OK) != -1)
 -        pop = pmemobj_open("/dev/shm/pool", POBJ_LAYOUT_NAME(clht));
-+    size_t pool_size = 32*1024*1024UL;
++    __AFL_INIT();
++    remove(getenv("PMEM_POOL"));
++    const size_t pool_size = 32 * 1024 * 1024UL, pool_hdr_size = 0x1000UL;
 +    if (access(getenv("PMEM_POOL"), F_OK) != -1)
 +        pop = pmemobj_open(getenv("PMEM_POOL"), POBJ_LAYOUT_NAME(clht));
      else
@@ -274,7 +276,7 @@ index 7411f12..5a01626 100644
  
      if (pop == NULL)
          perror("failed to open the pool\n");
-@@ -269,6 +283,14 @@ clht_create(uint64_t num_buckets)
+@@ -269,6 +285,14 @@ clht_create(uint64_t num_buckets)
          w->resize_lock = LOCK_FREE;
          w->gc_lock = LOCK_FREE;
          w->status_lock = LOCK_FREE;
@@ -289,7 +291,7 @@ index 7411f12..5a01626 100644
      }
  
      return w;
-@@ -342,7 +364,7 @@ clht_hashtable_create(uint64_t num_buckets)
+@@ -342,7 +366,7 @@ clht_hashtable_create(uint64_t num_buckets)
  
  /* Hash a key for a particular hash table. */
      uint64_t
@@ -298,7 +300,7 @@ index 7411f12..5a01626 100644
  {
      /* uint64_t hashval; */
      /* return __ac_Jenkins_hash_64(key) & (hashtable->hash); */
-@@ -395,7 +417,7 @@ retry:
+@@ -395,7 +419,7 @@ retry:
  bucket_exists(volatile bucket_t* bucket, clht_addr_t key)
  {
      uint32_t j;
@@ -307,7 +309,7 @@ index 7411f12..5a01626 100644
      {
          for (j = 0; j < ENTRIES_PER_BUCKET; j++)
          {
-@@ -405,7 +427,7 @@ bucket_exists(volatile bucket_t* bucket, clht_addr_t key)
+@@ -405,7 +429,7 @@ bucket_exists(volatile bucket_t* bucket, clht_addr_t key)
              }
          }
          bucket = (bucket_t *)clht_ptr_from_off(bucket->next_off, true);
@@ -316,7 +318,7 @@ index 7411f12..5a01626 100644
      while (unlikely(bucket != NULL));
      return false;
  }
-@@ -441,11 +463,11 @@ clht_put(clht_t* h, clht_addr_t key, clht_val_t val)
+@@ -441,11 +465,11 @@ clht_put(clht_t* h, clht_addr_t key, clht_val_t val)
      clht_val_t* empty_v = NULL;
  
      uint32_t j;
@@ -330,7 +332,7 @@ index 7411f12..5a01626 100644
              {
                  LOCK_RLS(lock);
                  return false;
-@@ -495,7 +517,7 @@ clht_put(clht_t* h, clht_addr_t key, clht_val_t val)
+@@ -495,7 +519,7 @@ clht_put(clht_t* h, clht_addr_t key, clht_val_t val)
                  /* ht_resize_pes(h, 1); */
  				DEBUG_PRINT("Calling ht_status for key %ld\n", (long)key);
                  int ret = ht_status(h, 1, 0);
@@ -339,7 +341,7 @@ index 7411f12..5a01626 100644
  				// if crash, return true, because the insert anyway succeeded
  				if (ret == 0)
  					return true;
-@@ -536,7 +558,7 @@ clht_update(clht_t* h, clht_addr_t key, clht_val_t val)
+@@ -536,7 +560,7 @@ clht_update(clht_t* h, clht_addr_t key, clht_val_t val)
      CLHT_CHECK_STATUS(h);
  
      uint32_t j;
@@ -348,7 +350,7 @@ index 7411f12..5a01626 100644
      {
          for (j = 0; j < ENTRIES_PER_BUCKET; j++)
          {
-@@ -548,9 +570,12 @@ clht_update(clht_t* h, clht_addr_t key, clht_val_t val)
+@@ -548,9 +572,12 @@ clht_update(clht_t* h, clht_addr_t key, clht_val_t val)
              }
          }
          bucket = (bucket_t *)clht_ptr_from_off(bucket->next_off, true);
@@ -362,7 +364,7 @@ index 7411f12..5a01626 100644
      return false;
  }
  
-@@ -780,12 +805,14 @@ ht_resize_pes(clht_t* h, int is_increase, int by)
+@@ -780,12 +807,14 @@ ht_resize_pes(clht_t* h, int is_increase, int by)
      clflush_new_hashtable((bucket_t *)clht_ptr_from_off(ht_new->table_off, true), num_buckets_new);
      mfence();
  
@@ -378,7 +380,7 @@ index 7411f12..5a01626 100644
      ht_old->table_new = ht_new;
      TRYLOCK_RLS(h->resize_lock);
  
-@@ -1019,7 +1046,7 @@ void clht_lock_initialization(clht_t *h)
+@@ -1019,7 +1048,7 @@ void clht_lock_initialization(clht_t *h)
      bucket_t *buckets = (bucket_t *)clht_ptr_from_off(ht->table_off, true);
      for (i = 0; i < ht->num_buckets; i++) {
          buckets[i].lock = LOCK_FREE;

@@ -63,7 +63,7 @@ index 059d1e2..3b2a984 100755
  enum hashfunc_type {
      JENKINS_HASH=0, MURMUR3_HASH
 diff --git a/memcached.c b/memcached.c
-index f66a738..b297479 100755
+index f66a738..7802852 100755
 --- a/memcached.c
 +++ b/memcached.c
 @@ -60,6 +60,7 @@
@@ -87,7 +87,7 @@ index f66a738..b297479 100755
      exit(EXIT_SUCCESS);
  }
  
-@@ -6592,6 +6597,92 @@ static bool _parse_slab_sizes(char *s, uint32_t *slab_sizes) {
+@@ -6592,6 +6597,94 @@ static bool _parse_slab_sizes(char *s, uint32_t *slab_sizes) {
      return true;
  }
  
@@ -108,6 +108,8 @@ index f66a738..b297479 100755
 +} pthread_args;
 +
 +sem_t sema_init;
++
++extern void *membak, *addr;
 +
 +static void *connect_server(void *args)
 +{
@@ -180,7 +182,7 @@ index f66a738..b297479 100755
  int main (int argc, char **argv) {
      int c;
      bool lock_memory = false;
-@@ -6764,6 +6855,10 @@ int main (int argc, char **argv) {
+@@ -6764,6 +6857,10 @@ int main (int argc, char **argv) {
          NULL
      };
  
@@ -191,7 +193,7 @@ index f66a738..b297479 100755
      if (!sanitycheck()) {
          return EX_OSERR;
      }
-@@ -7812,6 +7907,16 @@ fprintf(stderr, "pslab_size=%ld", pslab_size);
+@@ -7812,6 +7909,18 @@ fprintf(stderr, "pslab_size=%ld", pslab_size);
          slabs_update_policy();
      }
  #endif
@@ -199,6 +201,8 @@ index f66a738..b297479 100755
 +    __AFL_INIT();
 +    afl_testcase_buf = __AFL_FUZZ_TESTCASE_BUF;
 +    afl_testcase_len = __AFL_FUZZ_TESTCASE_LEN;
++
++    memcpy(addr, membak, settings.pslab_size);
 +
 +    char cmd[128] = {};
 +    sprintf(cmd, "kill -9 `lsof -t -i:%d` 2> /dev/null", settings.port);
@@ -208,7 +212,7 @@ index f66a738..b297479 100755
  #ifdef EXTSTORE
      if (storage_file) {
          enum extstore_res eres;
-@@ -7970,6 +8075,52 @@ fprintf(stderr, "pslab_size=%ld", pslab_size);
+@@ -7970,6 +8079,52 @@ fprintf(stderr, "pslab_size=%ld", pslab_size);
      /* Initialize the uriencode lookup table. */
      uriencode_init();
  
@@ -261,3 +265,28 @@ index f66a738..b297479 100755
      /* enter the event loop */
      if (event_base_loop(main_base, 0) != 0) {
          retval = EXIT_FAILURE;
+diff --git a/pslab.c b/pslab.c
+index 912c97f..3382a2b 100755
+--- a/pslab.c
++++ b/pslab.c
+@@ -313,6 +313,8 @@ int pslab_pre_recover(char *name, uint32_t *slab_sizes, int slab_max,
+ }
+ 
+ bool pslab_force;
++const uint32_t pool_hdr_size = 0x1000;
++void *membak = NULL, *addr = NULL;
+ 
+ int pslab_create(char *pool_name, uint32_t pool_size, uint32_t slab_page_size,
+         uint32_t *slabclass_sizes, int slabclass_num) {
+@@ -333,6 +335,11 @@ int pslab_create(char *pool_name, uint32_t pool_size, uint32_t slab_page_size,
+         return -1;
+     }
+ 
++    // memcached membak
++    addr = (void *)pslab_pool;
++    membak = malloc(pool_size);
++    memcpy(membak, addr, pool_size);
++
+     length = (sizeof (pslab_pool_t) + sizeof (pslab_pool->slabclass_sizes[0])
+         * slabclass_num + 7) & PSLAB_ALIGN_MASK;
+     pmem_memset_nodrain(pslab_pool, 0, length);
